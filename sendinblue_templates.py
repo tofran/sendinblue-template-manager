@@ -5,19 +5,18 @@
 Download and upload template html content to sendinblue.
 Env var `SENDINBLUE_API_KEY` required (v3).
 
-Files are placed in `./templates` and named following the format:
+Files are named following the format:
  `<numeric-template-id>. <template name (escaped)>.html`
  ex: 1. `Sample template title.html`
 
 Usage:
- ./sendinblue-template.py download
+ ./sendinblue-template.py download [directory]
    Downloads the first 1000 templates from the sendinblue account.
 
- ./sendinblue-template.py upload
+ ./sendinblue-template.py upload [directory]
    Updates all matching templates html content in sendinblue.
 """
 
-import json
 import glob
 import os
 import re
@@ -25,7 +24,7 @@ import sys
 
 import requests
 
-FILE_ID_NAME_SEPARATOR = ". "
+FILENAME_SEPARATOR = ". "
 API_BASE_URL = "https://api.sendinblue.com/v3"
 API_KEY = os.getenv("SENDINBLUE_API_KEY")
 if not API_KEY:
@@ -55,8 +54,8 @@ def to_safe_path(string):
     return re.sub(r'[^\w\d\-\–\ ]', '_', str(string))
 
 
-def download(directory):
-    response = request(
+def get_templates():
+    return request(
         "GET",
         "/smtp/templates",
         params={  # TODO: Pagination
@@ -66,13 +65,17 @@ def download(directory):
         },
     ).json()
 
-    for template in response["templates"]:
+
+def download(directory):
+    os.makedirs(directory, exist_ok=True)
+
+    for template in get_templates()["templates"]:
         template_id = to_safe_path(f"{template['id']:03}")
         template_name = to_safe_path(template["name"])
 
         filename = os.path.join(
             directory,
-            f"{template_id}{FILE_ID_NAME_SEPARATOR}{template_name}.html",
+            f"{template_id}{FILENAME_SEPARATOR}{template_name}.html",
         )
 
         print(f"Saving {filename}")
@@ -84,7 +87,7 @@ def download(directory):
 def update_template(template_id, **kwargs):
     print(f"Updating template {template_id}... ", end="")
 
-    response = request(
+    request(
         "PUT",
         f"/smtp/templates/{template_id}",
         json=kwargs,
@@ -93,12 +96,35 @@ def update_template(template_id, **kwargs):
     print("done!")
 
 
-def upload(directory):
+def get_template_ids_to_filepath(directory):
+    template_ids_to_filepath = {}
+
     for filepath in sorted(glob.glob(f"{directory}/*.html")):
         filename = os.path.basename(filepath)
+        filename_parts = filename.split(FILENAME_SEPARATOR, maxsplit=2)
 
-        template_id, _name = filename.split(FILE_ID_NAME_SEPARATOR)
-        template_id = int(template_id)
+        if len(filename_parts) != 2:
+            raise RuntimeError(f"'{filepath}' does not follow expected naming format")
+
+        template_id_str, _name = filename_parts
+        template_id = int(template_id_str)
+
+        if template_id in template_ids_to_filepath:
+            raise RuntimeError(
+                "More than one file references the same template: '{}' and '{}' reference template #{}".format(
+                    template_ids_to_filepath[template_id],
+                    filename,
+                    template_id_str
+                )
+            )
+
+        template_ids_to_filepath[template_id] = filepath
+
+    return template_ids_to_filepath
+
+
+def upload(directory):
+    for template_id, filepath in get_template_ids_to_filepath(directory).items():
 
         with open(filepath, "r") as f:
             html_content = f.read()
@@ -106,9 +132,10 @@ def upload(directory):
         update_template(template_id, htmlContent=html_content)
 
 
-if __name__ == "__main__":
-    directory = "templates"
-    operation = sys.argv[1]
+def main():
+    args = sys.argv
+    operation = args[1]
+    directory = args[2] if len(args) > 2 else "."
 
     if operation == "download":
         download(directory)
@@ -116,3 +143,7 @@ if __name__ == "__main__":
         upload(directory)
     else:
         print(__doc__)
+
+
+if __name__ == "__main__":
+    main()
